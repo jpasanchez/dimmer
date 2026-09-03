@@ -1,9 +1,27 @@
 # Dimmer
 
-A system-wide scrim overlay for Android, toggled from a Quick Settings tile.
-Replicates the dim-and-blur that Android applies behind the notification shade.
+A full-screen dimming overlay for Android, toggled from a Quick Settings tile.
+Aims to reproduce the way the Android 16 notification shade makes the content
+behind it effectively vanish.
 
 Zero external dependencies — no AndroidX, no Compose, no Material.
+
+## The central finding
+
+An ordinary `TYPE_APPLICATION_OVERLAY` window **cannot** dim past 80%.
+
+Android 12 added tapjacking protection: overlay windows are untrusted, and one
+that sets `FLAG_NOT_TOUCHABLE` is capped at
+`InputManager.getMaximumObscuringOpacityForTouch()` — 0.8 by default. Setting a
+higher alpha changes nothing. Measured on a Pixel 10: exactly 20.0% content
+throughput on every channel regardless of requested alpha.
+
+Covering the screen opaquely *while letting touches through* is precisely what
+that protection exists to prevent.
+
+`TYPE_ACCESSIBILITY_OVERLAY` is a **trusted** window and is exempt. Same
+approach, measured 1.2% throughput. This is why every third-party dimmer app
+asks for accessibility access — it is not a convenience, it is the only route.
 
 ## Environment
 
@@ -11,118 +29,101 @@ Zero external dependencies — no AndroidX, no Compose, no Material.
 |---|---|
 | IDE | Android Studio Quail 3 on Windows 11 |
 | Build | AGP 9.3.2, Gradle version catalog (`gradle/libs.versions.toml`) |
-| Kotlin | AGP 9 **built-in Kotlin**. Do NOT apply `org.jetbrains.kotlin.android` — it is incompatible with the AGP 9 DSL and will fail the build. |
+| Kotlin | AGP 9 **built-in Kotlin**. Do NOT apply `org.jetbrains.kotlin.android` — incompatible with the AGP 9 DSL. |
 | SDK | `compileSdk` / `targetSdk` = 36, `minSdk` = 34 |
 | Device | Pixel 10, Android 16, USB debugging |
-| git | WSL 2, credentials via Git Credential Manager on the Windows side |
+| git | WSL 2; credentials via Git Credential Manager on the Windows side |
 
-Build from Studio (Ctrl+F9), not from WSL — WSL has no JDK, and installing one
-would give you two Gradle daemons fighting over the same `build/` directory.
+Build from Studio (Ctrl+F9), not WSL — WSL has no JDK, and installing one gives
+you two Gradle daemons fighting over the same `build/` directory.
 
-`compileSdk` uses AGP 9's block syntax, not the old assignment:
-
-```kotlin
-compileSdk { version = release(36) }
-```
-
-Staying on 36 rather than 37 is deliberate: it matches the device the scrim
+`compileSdk` uses AGP 9 block syntax: `compileSdk { version = release(36) }`.
+Staying on 36 rather than 37 is deliberate — it matches the device the scrim
 reference was measured on.
 
-## How it works
+## Architecture
 
-| Piece | Role |
+| File | Role |
 |---|---|
-| `DimmerOverlay` | One `View`, animated alpha, added to `WindowManager` as `TYPE_APPLICATION_OVERLAY`. This is the whole effect. |
-| `DimmerService` | Foreground service keeping the process (and the view) alive. `specialUse` type, required on API 34+. |
+| `DimmerAccessibilityService` | Owns the scrim. Being an accessibility service is what defeats the opacity cap. The system keeps it bound, so no foreground service is needed. |
+| `DimmerOverlay` | One `View` with animated alpha, added as `TYPE_ACCESSIBILITY_OVERLAY`. Must be created from the service context — WindowManager rejects that window type from anyone else. |
 | `DimmerTile` | `TileService`. The trigger. |
-| `MainActivity` | Permission grant plus live sliders for alpha and blur. |
+| `MainActivity` | Setup and the alpha slider. |
 
-`FLAG_NOT_TOUCHABLE` makes it usable — touches pass through to the app
-underneath. `FLAG_LAYOUT_NO_LIMITS` plus `fitInsetsTypes = 0` extends the
-window over the bars and cutout.
+`FLAG_NOT_TOUCHABLE` is what makes it usable — touches pass to the app beneath.
+`FLAG_LAYOUT_NO_LIMITS` plus `fitInsetsTypes = 0` extends it over the bars and
+cutout. SystemUI's own bar content still draws above, so the clock and gesture
+pill stay undimmed; that matches the real shade and is not adjustable.
 
-Note that `TYPE_APPLICATION_OVERLAY` sits *below* core system UI. The scrim
-covers the status and nav bar regions, but the clock, status icons and gesture
-pill draw above it and stay undimmed. That matches the real shade, and it is a
-hard ceiling rather than something you can flag your way past.
-
-Blur uses `FLAG_BLUR_BEHIND` + `blurBehindRadius` (API 31+), gated on
-`WindowManager.isCrossWindowBlurEnabled()` — false under battery saver.
+Blur was removed. At ~98% opacity almost nothing survives to blur, so
+`FLAG_BLUR_BEHIND` bought nothing and cost a capability check.
 
 ## Setup on device
 
-1. Run from Studio. App installs and opens.
-2. Tap **Grant "Display over other apps"** → enable in Settings.
-3. Tap **Add Quick Settings tile** → confirm the prompt.
+1. Run from Studio.
+2. Settings → Accessibility → Downloaded apps → Dimmer → on.
+   If Android says "Restricted setting", clear the sideload gate first:
+   App info → ⋮ → **Allow restricted settings**, or
+   `adb shell appops set dev.dimmer ACCESS_RESTRICTED_SETTINGS allow`
+3. In the app: **Add Quick Settings tile**.
 4. Pull down the shade, tap the tile.
 
-No signing key, no Play Console, no privacy policy. Personal sideload only.
+**Escape hatch.** If the screen is stuck dark and you cannot navigate:
 
-## Matching the real scrim — NOT YET DONE
+```
+adb shell settings put secure enabled_accessibility_services ""
+```
 
-`scrimColor` and `scrimAlpha` in `DimmerOverlay.kt` are placeholders. Two
-reasons you cannot just read the real values off:
+## Measured values
 
-- Since Android 12 the shade scrim is tinted from the Monet/dynamic-colour
-  palette, not pure `#000000`. It shifts with your wallpaper.
-- Alpha animates against shade expansion fraction, so the settled value is one
-  point on a curve.
+Calibration solves `result = scrim × a + background × (1 − a)`. Two known
+backgrounds give two equations and a unique solution per channel.
 
-Solve for them instead. The scrim composites as
-`result = scrim × a + background × (1 − a)`, so two known backgrounds give two
-equations and a unique solution:
+Native Android 16 shade, fully expanded, measured over two backgrounds:
 
-1. Make a pure white and a pure black full-screen PNG. Put both on the phone.
-2. Clear all notifications — fewer notifications means more visible scrim below
-   the shade panel.
-3. Open the white image fullscreen. Pull the shade fully open and let it
-   settle. Screenshot (Power + Volume Down).
-4. Repeat with the black image. Same app, same wallpaper, same shade state.
-5. Sample the same pixel in the dimmed region of both, well below the panel and
-   away from any soft edge.
-6. Per channel: `a = 1 − (white − black) / 255`, then `scrim = black / a`.
+**scrim ≈ `(231, 188, 181)`, alpha ≈ 0.98**
 
-Solid fields are deliberate: blurring a uniform colour returns the same colour,
-so blur drops out of the measurement and you are solving for dim alone. Tune
-`blurRadiusPx` separately by eye.
+Predictions land within 1–2 levels on all six channel samples.
 
-Do this on the physical device with your actual wallpaper. Keep both
-screenshots as the Android 16 reference.
+That colour comes from the wallpaper's Monet palette, so it drifts when the
+wallpaper changes. Deriving it from `android.R.color.system_*` at runtime is
+the open task.
 
-For the animation curve, AOSP's `ScrimController` and `ScrimState` in
-`frameworks/base/packages/SystemUI` are the reference implementation.
+To re-measure: screenshot the target effect over a pure white full-screen image
+and again over pure black, sample the same pixel in both, then per channel
+`a = 1 − (white − black) / 255` and `scrim = black / a`. Solid fields are
+deliberate — blurring a uniform colour returns the same colour, so blur drops
+out and you solve for dim alone.
 
-## Known limits (by design, not fixable)
+## Known limits
 
-- The overlay is force-hidden over permission dialogs and parts of Settings.
-  Tapjacking protection, tightened in Android 12.
-- Any app holding `HIDE_OVERLAY_WINDOWS` can suppress it.
+- Overlays are force-hidden over permission dialogs and parts of Settings.
 - DRM/secure video surfaces may flicker or go black underneath.
 - Screenshots capture the scrim.
 - Panel output is unchanged — a black film, not real dimming. No OLED power
   saving, and it cannot go below the panel's minimum brightness.
+- Accessibility overlay z-order versus the notification shade is **untested**.
+  If the scrim covers the shade, the tile is unreachable while dimming is on.
 
-## Next steps once the MVP feels right
+## Next
 
-- Track the real shade instead of a binary toggle: `AccessibilityService`
-  watching `TYPE_WINDOWS_CHANGED` for the SystemUI window, mirroring its
-  expansion fraction.
+- Derive the scrim colour from the Monet palette instead of hardcoding.
+- Track the real shade rather than a binary toggle: watch `TYPE_WINDOWS_CHANGED`
+  for the SystemUI window and mirror its expansion fraction.
 - Per-app rules keyed off the foreground package.
-- Schedule or ambient-light-driven alpha via `SensorManager`.
-- Warmth/tint: swap the solid background for a `ColorMatrixColorFilter`.
+- Warmth/tint via `ColorMatrixColorFilter`.
 
-## Parked — revisit after the MVP
+## Parked
 
 - **Windows network profile is set to Public.** Noticed during adb firewall
   setup; the Allow dialog offered no private option, so it was cancelled. USB
-  debugging is unaffected. Fix at Settings > Network & internet > (connection) >
-  Network profile type > Private. Also blocks wireless debugging until changed.
-- **Android 17 update.** Holding on Android 16 until the scrim reference above
-  is measured and recorded. Once `scrimColor` and `scrimAlpha` are filled in,
-  the update is safe — re-measure afterward and compare. Nothing in Android 17's
-  behaviour changes affects overlays, blur, tiles or foreground services.
-- **Android Studio Quail 4.** Deferred until there is a committed green build to
-  compare against; IDE updates often prompt an AGP upgrade that rewrites build
-  files.
-- **Claude Code.** Planned for v2. Will need a `CLAUDE.md` carrying the
+  debugging is unaffected. Settings → Network & internet → (connection) →
+  Network profile type → Private. Also blocks wireless debugging.
+- **Android 17 update.** Held on 16 until the scrim reference was measured —
+  now done, so the update is safe. Re-measure afterward and compare. Nothing in
+  Android 17's behaviour changes affects overlays, tiles, or accessibility
+  services.
+- **Android Studio Quail 4.** Deferred; IDE updates often prompt an AGP upgrade
+  that rewrites build files.
+- **Claude Code.** Planned for v3. Will need a `CLAUDE.md` carrying the
   constraints in this README.
