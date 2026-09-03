@@ -1,15 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- Draw the scrim above other apps. User grants this in Settings. -->
-    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
-
-    <!-- Keeps the process (and therefore the overlay view) alive. -->
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
-
-    <!-- The ongoing notification the foreground service requires. -->
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- No SYSTEM_ALERT_WINDOW, no FOREGROUND_SERVICE, no POST_NOTIFICATIONS.
+         The accessibility service replaces all three. -->
 
     <application
         android:label="@string/app_name"
@@ -27,12 +20,16 @@
         </activity>
 
         <service
-            android:name=".DimmerService"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="User-toggled screen dimming overlay" />
+            android:name=".DimmerAccessibilityService"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
         </service>
 
         <service

@@ -2,4 +2,5 @@
 <resources>
     <string name="app_name">Dimmer</string>
     <string name="tile_label">Dimmer</string>
+    <string name="accessibility_description">Draws a full-screen dimming layer above other apps. Accessibility access is required because ordinary app overlays are capped at 80% opacity.</string>
 </resources>
