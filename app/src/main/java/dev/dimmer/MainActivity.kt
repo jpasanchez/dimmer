@@ -8,11 +8,15 @@ import android.graphics.drawable.Icon
 import android.os.Bundle
 import android.provider.Settings
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup.LayoutParams.MATCH_PARENT
 import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.SeekBar
+import android.widget.Spinner
 import android.widget.TextView
 import java.util.function.Consumer
 
@@ -20,6 +24,7 @@ class MainActivity : Activity() {
 
     private lateinit var setupBtn: Button
     private lateinit var toggleBtn: Button
+    private lateinit var modeSpinner: Spinner
     private lateinit var alphaLabel: TextView
     private lateinit var alphaBar: SeekBar
     private lateinit var readout: TextView
@@ -57,6 +62,24 @@ class MainActivity : Activity() {
             }
         }
 
+        val modes = ScrimPalette.Mode.entries
+        modeSpinner = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@MainActivity,
+                android.R.layout.simple_spinner_dropdown_item,
+                modes.map { it.label }
+            )
+            setSelection(modes.indexOf(DimmerOverlay.mode))
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                    if (modes[pos] != DimmerOverlay.mode) {
+                        DimmerOverlay.setMode(this@MainActivity, modes[pos])
+                    }
+                }
+                override fun onNothingSelected(p: AdapterView<*>?) {}
+            }
+        }
+
         alphaLabel = TextView(this)
         alphaBar = SeekBar(this).apply {
             max = 100
@@ -72,7 +95,7 @@ class MainActivity : Activity() {
 
         readout = TextView(this).apply { setPadding(0, pad, 0, 0) }
 
-        listOf(setupBtn, toggleBtn, addTile, alphaLabel, alphaBar, readout)
+        listOf(setupBtn, toggleBtn, addTile, modeSpinner, alphaLabel, alphaBar, readout)
             .forEach { root.addView(it, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)) }
 
         setContentView(root)
@@ -80,8 +103,6 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        // The panic button and the QS tile both change state without going
-        // through this Activity, so listen rather than poll.
         DimmerOverlay.onStateChanged = { runOnUiThread { refresh() } }
         refresh()
     }
@@ -98,7 +119,6 @@ class MainActivity : Activity() {
         toggleBtn.text = if (DimmerOverlay.isShowing) "Turn dimmer OFF" else "Turn dimmer ON"
         toggleBtn.isEnabled = on
 
-        // Panic button resets alpha, so the slider can drift out of sync too.
         val want = (DimmerOverlay.scrimAlpha * 100).toInt()
         if (alphaBar.progress != want) alphaBar.progress = want
 
@@ -106,15 +126,35 @@ class MainActivity : Activity() {
 
         val b = VisibilityMonitor.brightness(this)
         val v = VisibilityMonitor.visibility(this)
+        val monet = ScrimPalette.token(this, ScrimPalette.monetToken)
+        val near = ScrimPalette.closestTo(this, ScrimPalette.MEASURED_SHADE)
+
         readout.text = buildString {
-            append("Panel brightness   ${"%.0f".format(b * 100)}%\n")
-            append("Est. visibility    ${"%.1f".format(v * 100)}%\n")
-            append("Panic floor        ${"%.1f".format(VisibilityMonitor.floor * 100)}%")
-            if (v <= VisibilityMonitor.floor) append("   <- button shows")
-            append("\n\nBrightness is weighted at ")
-            append("${VisibilityMonitor.brightnessWeight}")
-            append(" because dimming the panel keeps contrast intact, ")
-            append("while scrim alpha destroys it.")
+            append("Scrim colour    ${ScrimPalette.hex(DimmerOverlay.scrimColor)}\n")
+            append("Measured shade  ${ScrimPalette.hex(ScrimPalette.MEASURED_SHADE)}\n")
+            append("${ScrimPalette.monetToken}  ")
+            append(if (monet != null) ScrimPalette.hex(monet) else "not available")
+            append("\n\nClosest token to measured shade:\n    ")
+            if (near != null) {
+                append("${near.first}  ${ScrimPalette.hex(near.second)}  (dist ${near.third})")
+            } else append("none found")
+
+            append("\n\n--- brightness diagnostics ---\n")
+            append("screen_brightness_float  ")
+            append(VisibilityMonitor.rawFloat(this@MainActivity)?.let { "%.3f".format(it) } ?: "absent")
+            append("\nscreen_brightness (int)  ")
+            append(VisibilityMonitor.rawInt(this@MainActivity)?.toString() ?: "absent")
+            append("\nadaptive mode            ")
+            append(when (VisibilityMonitor.autoMode(this@MainActivity)) {
+                1 -> "automatic"; 0 -> "manual"; else -> "unknown"
+            })
+            append("\nobserver                 ")
+            append(if (VisibilityMonitor.observerRegistered) "registered" else "NOT registered")
+            append(", ${VisibilityMonitor.observerFires} fires")
+
+            append("\n\nUsing ${"%.0f".format(b * 100)}%")
+            append("   Est. visibility ${"%.1f".format(v * 100)}%")
+            if (v <= VisibilityMonitor.floor) append("   <- panic shows")
         }
     }
 }

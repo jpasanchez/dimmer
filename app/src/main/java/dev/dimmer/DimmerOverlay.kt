@@ -16,15 +16,13 @@ import android.view.animation.PathInterpolator
  */
 object DimmerOverlay {
 
-    var scrimColor: Int = Color.rgb(231, 188, 181)
-    var scrimAlpha: Float = 0.98f
+    var mode: ScrimPalette.Mode = ScrimPalette.Mode.SHADE_MATCH
+    var scrimColor: Int = ScrimPalette.MEASURED_SHADE
+    var scrimAlpha: Float = 0.95f
     var fadeMs: Long = 220L
 
-    /**
-     * Fires whenever the scrim is shown, hidden, or re-alpha'd -- including
-     * from the panic button, which changes state behind the UI's back.
-     * MainActivity registers while resumed.
-     */
+    /** Fires on show, hide, alpha or colour change -- including from the
+     *  panic button and the QS tile, which act behind the UI's back. */
     var onStateChanged: (() -> Unit)? = null
 
     private val easing = PathInterpolator(0.4f, 0f, 0.2f, 1f)
@@ -35,6 +33,10 @@ object DimmerOverlay {
 
     fun show(svc: AccessibilityService) {
         if (view != null) return
+        // Re-resolve every time, so SYSTEM mode tracks wallpaper changes
+        // without needing to restart anything.
+        scrimColor = ScrimPalette.resolve(svc, mode)
+
         val wm = svc.getSystemService(WindowManager::class.java)
         val v = View(svc).apply {
             setBackgroundColor(scrimColor)
@@ -44,7 +46,6 @@ object DimmerOverlay {
         view = v
         v.animate().alpha(scrimAlpha).setDuration(fadeMs).setInterpolator(easing).start()
 
-        // Scrim was just inserted, so anything previously on top is now below.
         PanicButton.raise()
         PanicButton.sync()
         onStateChanged?.invoke()
@@ -71,9 +72,12 @@ object DimmerOverlay {
         onStateChanged?.invoke()
     }
 
-    fun setColor(c: Int) {
-        scrimColor = c
-        view?.setBackgroundColor(c)
+    /** Switch source and apply immediately, even mid-dim. */
+    fun setMode(ctx: android.content.Context, m: ScrimPalette.Mode) {
+        mode = m
+        scrimColor = ScrimPalette.resolve(ctx, m)
+        view?.setBackgroundColor(scrimColor)
+        onStateChanged?.invoke()
     }
 
     private fun buildParams(): WindowManager.LayoutParams {
