@@ -12,12 +12,10 @@ import android.view.animation.PathInterpolator
  *
  * Added as TYPE_ACCESSIBILITY_OVERLAY, which is why it must be created from
  * the AccessibilityService context -- WindowManager rejects that window type
- * from anyone else.
+ * from anyone else, and TYPE_APPLICATION_OVERLAY would be capped at 0.8.
  */
 object DimmerOverlay {
 
-    // 0.95 rather than 1.0 on purpose: leaves a faint ghost so you can still
-    // find your way to the tile. Native Android sits at roughly this value.
     var scrimColor: Int = Color.BLACK
     var scrimAlpha: Float = 0.95f
     var fadeMs: Long = 220L
@@ -38,9 +36,14 @@ object DimmerOverlay {
         wm.addView(v, buildParams())
         view = v
         v.animate().alpha(scrimAlpha).setDuration(fadeMs).setInterpolator(easing).start()
+
+        // Scrim was just inserted, so anything previously on top is now below.
+        PanicButton.raise()
+        PanicButton.sync()
     }
 
     fun hide(svc: AccessibilityService) {
+        PanicButton.hide()
         val v = view ?: return
         view = null
         val wm = svc.getSystemService(WindowManager::class.java)
@@ -55,6 +58,7 @@ object DimmerOverlay {
             it.animate().cancel()
             it.alpha = scrimAlpha
         }
+        PanicButton.sync()
     }
 
     fun setColor(c: Int) {
