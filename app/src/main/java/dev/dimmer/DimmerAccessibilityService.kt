@@ -7,15 +7,14 @@ import android.view.accessibility.AccessibilityEvent
 /**
  * Owner of the scrim.
  *
- * Exists for one reason: accessibility windows are TRUSTED, so they are exempt
- * from the tapjacking opacity ceiling. A TYPE_APPLICATION_OVERLAY window that
- * sets FLAG_NOT_TOUCHABLE is clamped to InputManager
- * .getMaximumObscuringOpacityForTouch() -- 0.8 on this device, measured as
- * exactly 20% content throughput no matter what alpha we asked for. Trusted
- * windows have no such cap.
+ * Exists for one reason: accessibility windows are TRUSTED, so they escape the
+ * tapjacking opacity ceiling. A TYPE_APPLICATION_OVERLAY window with
+ * FLAG_NOT_TOUCHABLE is clamped to
+ * InputManager.getMaximumObscuringOpacityForTouch() -- 0.8 here, measured as
+ * exactly 20% content throughput no matter what alpha was requested.
  *
- * Side benefit: the system keeps this bound while it is enabled, so no
- * foreground service and no ongoing notification are needed.
+ * Side benefit: the system keeps this bound, so no foreground service and no
+ * ongoing notification.
  */
 class DimmerAccessibilityService : AccessibilityService() {
 
@@ -38,22 +37,24 @@ class DimmerAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
+        VisibilityMonitor.start(this)
         DimmerTile.refresh(this)
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
+        VisibilityMonitor.stop(this)
         DimmerOverlay.hide(this)
         instance = null
         return super.onUnbind(intent)
     }
 
     override fun onDestroy() {
+        VisibilityMonitor.stop(this)
         DimmerOverlay.hide(this)
         instance = null
         super.onDestroy()
     }
 
-    // Required overrides. Nothing to do yet -- window tracking comes later.
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
     override fun onInterrupt() {}
 }

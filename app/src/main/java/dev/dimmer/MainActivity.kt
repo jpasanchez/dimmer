@@ -21,6 +21,8 @@ class MainActivity : Activity() {
     private lateinit var setupBtn: Button
     private lateinit var toggleBtn: Button
     private lateinit var alphaLabel: TextView
+    private lateinit var alphaBar: SeekBar
+    private lateinit var readout: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -39,10 +41,7 @@ class MainActivity : Activity() {
         }
 
         toggleBtn = Button(this).apply {
-            setOnClickListener {
-                DimmerAccessibilityService.toggle()
-                postDelayed({ refresh() }, 350)
-            }
+            setOnClickListener { DimmerAccessibilityService.toggle() }
         }
 
         val addTile = Button(this).apply {
@@ -59,27 +58,21 @@ class MainActivity : Activity() {
         }
 
         alphaLabel = TextView(this)
-        val alphaBar = SeekBar(this).apply {
+        alphaBar = SeekBar(this).apply {
             max = 100
             progress = (DimmerOverlay.scrimAlpha * 100).toInt()
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(sb: SeekBar, p: Int, fromUser: Boolean) {
-                    if (!fromUser) return
-                    DimmerOverlay.setAlpha(p / 100f)
-                    alphaLabel.text = "Scrim alpha  ${"%.2f".format(p / 100f)}"
+                    if (fromUser) DimmerOverlay.setAlpha(p / 100f)
                 }
                 override fun onStartTrackingTouch(sb: SeekBar) {}
                 override fun onStopTrackingTouch(sb: SeekBar) {}
             })
         }
 
-        val hint = TextView(this).apply {
-            text = "If the screen gets stuck dark, run this from your PC:\n" +
-                "adb shell settings put secure enabled_accessibility_services \"\""
-            setPadding(0, pad, 0, 0)
-        }
+        readout = TextView(this).apply { setPadding(0, pad, 0, 0) }
 
-        listOf(setupBtn, toggleBtn, addTile, alphaLabel, alphaBar, hint)
+        listOf(setupBtn, toggleBtn, addTile, alphaLabel, alphaBar, readout)
             .forEach { root.addView(it, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)) }
 
         setContentView(root)
@@ -87,7 +80,15 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        // The panic button and the QS tile both change state without going
+        // through this Activity, so listen rather than poll.
+        DimmerOverlay.onStateChanged = { runOnUiThread { refresh() } }
         refresh()
+    }
+
+    override fun onPause() {
+        DimmerOverlay.onStateChanged = null
+        super.onPause()
     }
 
     private fun refresh() {
@@ -96,6 +97,24 @@ class MainActivity : Activity() {
         setupBtn.isEnabled = !on
         toggleBtn.text = if (DimmerOverlay.isShowing) "Turn dimmer OFF" else "Turn dimmer ON"
         toggleBtn.isEnabled = on
+
+        // Panic button resets alpha, so the slider can drift out of sync too.
+        val want = (DimmerOverlay.scrimAlpha * 100).toInt()
+        if (alphaBar.progress != want) alphaBar.progress = want
+
         alphaLabel.text = "Scrim alpha  ${"%.2f".format(DimmerOverlay.scrimAlpha)}"
+
+        val b = VisibilityMonitor.brightness(this)
+        val v = VisibilityMonitor.visibility(this)
+        readout.text = buildString {
+            append("Panel brightness   ${"%.0f".format(b * 100)}%\n")
+            append("Est. visibility    ${"%.1f".format(v * 100)}%\n")
+            append("Panic floor        ${"%.1f".format(VisibilityMonitor.floor * 100)}%")
+            if (v <= VisibilityMonitor.floor) append("   <- button shows")
+            append("\n\nBrightness is weighted at ")
+            append("${VisibilityMonitor.brightnessWeight}")
+            append(" because dimming the panel keeps contrast intact, ")
+            append("while scrim alpha destroys it.")
+        }
     }
 }

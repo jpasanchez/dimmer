@@ -10,15 +10,22 @@ import android.view.animation.PathInterpolator
 /**
  * The scrim: one plain View with an animated alpha.
  *
- * Added as TYPE_ACCESSIBILITY_OVERLAY, which is why it must be created from
- * the AccessibilityService context -- WindowManager rejects that window type
- * from anyone else, and TYPE_APPLICATION_OVERLAY would be capped at 0.8.
+ * TYPE_ACCESSIBILITY_OVERLAY, so it must be created from the
+ * AccessibilityService context -- WindowManager rejects that type from anyone
+ * else, and TYPE_APPLICATION_OVERLAY would be capped at 0.8 opacity.
  */
 object DimmerOverlay {
 
     var scrimColor: Int = Color.BLACK
     var scrimAlpha: Float = 0.95f
     var fadeMs: Long = 220L
+
+    /**
+     * Fires whenever the scrim is shown, hidden, or re-alpha'd -- including
+     * from the panic button, which changes state behind the UI's back.
+     * MainActivity registers while resumed.
+     */
+    var onStateChanged: (() -> Unit)? = null
 
     private val easing = PathInterpolator(0.4f, 0f, 0.2f, 1f)
 
@@ -40,6 +47,7 @@ object DimmerOverlay {
         // Scrim was just inserted, so anything previously on top is now below.
         PanicButton.raise()
         PanicButton.sync()
+        onStateChanged?.invoke()
     }
 
     fun hide(svc: AccessibilityService) {
@@ -50,6 +58,7 @@ object DimmerOverlay {
         v.animate().alpha(0f).setDuration(fadeMs).setInterpolator(easing)
             .withEndAction { runCatching { wm.removeViewImmediate(v) } }
             .start()
+        onStateChanged?.invoke()
     }
 
     fun setAlpha(a: Float) {
@@ -59,6 +68,7 @@ object DimmerOverlay {
             it.alpha = scrimAlpha
         }
         PanicButton.sync()
+        onStateChanged?.invoke()
     }
 
     fun setColor(c: Int) {

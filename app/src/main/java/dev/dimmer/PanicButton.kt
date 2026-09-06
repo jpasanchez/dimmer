@@ -9,31 +9,29 @@ import android.view.WindowManager
 import android.widget.TextView
 
 /**
- * Escape hatch. A small tappable window that sits ABOVE the scrim and turns it
- * off, so a near-opaque screen never requires adb to recover from.
+ * Escape hatch. A small tappable window ABOVE the scrim that turns it off, so a
+ * near-opaque screen never needs adb to recover from.
  *
- * Two details make this work:
- *  - It is added AFTER the scrim. Windows of the same type from the same
- *    service z-order by insertion, so later means on top.
- *  - It does NOT set FLAG_NOT_TOUCHABLE. The scrim stays pass-through; only
- *    this button's own bounds capture touches.
+ *  - Added AFTER the scrim: same window type from the same service z-orders by
+ *    insertion, so later means on top.
+ *  - Does NOT set FLAG_NOT_TOUCHABLE. The scrim stays pass-through; only this
+ *    button's own bounds capture touches.
+ *
+ * Visibility is decided by VisibilityMonitor, not by scrim alpha alone, so
+ * turning the panel brightness down while dimming also summons it.
  */
 object PanicButton {
 
-    /** Above this scrim alpha, navigating by sight is unreliable. */
-    const val THRESHOLD = 0.97  f
-
-    /** Scrim alpha to fall back to when the button is tapped. */
-    const val SAFE_ALPHA = 0.80f
+    /** Scrim alpha to fall back to after a tap. Must stay readable. */
+    var safeAlpha: Float = 0.90f
 
     private var view: View? = null
 
     val isShowing: Boolean get() = view != null
 
-    /** Add or remove the button to match the current scrim state. */
     fun sync() {
         val svc = DimmerAccessibilityService.instance ?: return hideInternal()
-        val needed = DimmerOverlay.isShowing && DimmerOverlay.scrimAlpha >= THRESHOLD
+        val needed = DimmerOverlay.isShowing && VisibilityMonitor.isUnreadable(svc)
         when {
             needed && view == null -> add(svc)
             !needed && view != null -> hideInternal()
@@ -55,7 +53,7 @@ object PanicButton {
         val margin = (28 * d).toInt()
 
         val btn = TextView(svc).apply {
-            text = "\u2715"                     // multiplication X
+            text = "\u2715"
             textSize = 22f
             setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
@@ -65,7 +63,9 @@ object PanicButton {
                 setColor(Color.rgb(0, 200, 83))
             }
             setOnClickListener {
-                DimmerOverlay.setAlpha(SAFE_ALPHA)
+                // Tapping hides the scrim, so isShowing goes false and sync()
+                // removes this button -- no chance of a reappear loop.
+                DimmerOverlay.setAlpha(safeAlpha)
                 DimmerOverlay.hide(svc)
                 DimmerTile.refresh(svc)
             }
@@ -74,7 +74,6 @@ object PanicButton {
         val lp = WindowManager.LayoutParams(
             size, size,
             WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
-            // Deliberately NOT touchable-flagged: this one must receive taps.
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
