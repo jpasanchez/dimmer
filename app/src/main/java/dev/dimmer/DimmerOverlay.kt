@@ -16,8 +16,8 @@ import android.view.animation.PathInterpolator
  */
 object DimmerOverlay {
 
-    var scrimColor: Int = Color.BLACK
-    var scrimAlpha: Float = 0.95f
+    var scrimColor: Int = Color.rgb(231, 188, 181)
+    var scrimAlpha: Float = 0.98f
     var fadeMs: Long = 220L
 
     /**
