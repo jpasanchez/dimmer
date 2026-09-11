@@ -23,7 +23,7 @@ import kotlin.math.roundToInt
 
 class MainActivity : Activity() {
 
-    // Fine slider covers [FINE_MIN, 1.0] in 0.0001 steps.
+    // Fine slider covers [FINE_MIN, 1.0] at 1/FINE_STEPS_PER_UNIT resolution.
     // Everything perceptually interesting lives above 0.95, and the coarse
     // slider gives that range only 5 of its 100 steps.
     private val FINE_MIN = 0.95f
@@ -190,8 +190,8 @@ class MainActivity : Activity() {
 
             append("\n\nUsing ${"%.0f".format(b * 100)}%")
             append("   Est. visibility ${"%.1f".format(v * 100)}%")
-            if (v <= VisibilityMonitor.floor) append("   <- panic shows")
             append("\n\nNative shade measures ~2.0% visible.")
+            append("\nStuck? Double volume press disables the service.")
         }
     }
 }

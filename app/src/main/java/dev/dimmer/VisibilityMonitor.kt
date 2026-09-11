@@ -8,26 +8,23 @@ import android.os.Looper
 import android.provider.Settings
 
 /**
- * Estimates whether the screen has become unreadable, so the panic button
- * appears for the right reason.
+ * Reads panel brightness and estimates how much light reaches the eye.
  *
- * Brightness and scrim alpha are NOT interchangeable:
- *  - Low panel brightness scales everything uniformly. Contrast survives and
- *    the eye adapts, so content stays legible -- just dim.
- *  - Scrim alpha destroys contrast by pulling every pixel toward one colour.
- *    Adaptation cannot recover what is no longer there.
+ * No longer gates anything -- it drove the old on-screen panic button, which
+ * the system accessibility shortcut replaced. Kept because the readout is
+ * useful while tuning alpha and colour, and because the ContentObserver is
+ * what keeps that readout live: pulling the shade to reach the brightness
+ * slider does not pause the Activity, so onResume never fires.
  *
- * So alpha dominates and brightness is a weak modifier, applied as a root.
+ * Brightness is weighted low on purpose. Dimming the panel scales everything
+ * uniformly -- contrast survives and the eye adapts. Scrim alpha destroys
+ * contrast outright, and adaptation cannot recover what is gone.
  */
 object VisibilityMonitor {
-
-    var floor: Float = 0.03f
 
     /** 0 ignores brightness; 1 makes it as important as alpha. */
     var brightnessWeight: Float = 0.25f
 
-    // --- Diagnostics. Which brightness key a build actually maintains varies,
-    // --- so expose the raw reads rather than trusting one.
     var observerFires: Int = 0; private set
     var observerRegistered: Boolean = false; private set
 
@@ -38,7 +35,7 @@ object VisibilityMonitor {
         runCatching { Settings.System.getFloat(ctx.contentResolver, "screen_brightness_float") }
             .getOrNull()
 
-    /** Legacy 0..255 value. May go stale when adaptive brightness is on. */
+    /** Legacy 0..255 value. */
     fun rawInt(ctx: Context): Int? =
         runCatching {
             Settings.System.getInt(ctx.contentResolver, Settings.System.SCREEN_BRIGHTNESS)
@@ -50,7 +47,6 @@ object VisibilityMonitor {
             Settings.System.getInt(ctx.contentResolver, Settings.System.SCREEN_BRIGHTNESS_MODE)
         }.getOrNull()
 
-    /** Panel brightness 0..1. Falls back to 1.0 (fail safe: no false panic). */
     fun brightness(ctx: Context): Float {
         rawFloat(ctx)?.let { if (it in 0f..1f) return it }
         rawInt(ctx)?.let { return (it / 255f).coerceIn(0f, 1f) }
@@ -65,16 +61,11 @@ object VisibilityMonitor {
         return weighted * (1f - DimmerOverlay.scrimAlpha)
     }
 
-    fun isUnreadable(ctx: Context): Boolean = visibility(ctx) <= floor
-
     fun start(svc: AccessibilityService) {
         if (observer != null) return
         val o = object : ContentObserver(Handler(Looper.getMainLooper())) {
             override fun onChange(selfChange: Boolean) {
                 observerFires++
-                PanicButton.sync()
-                // Was missing: the UI had no reason to redraw, so the
-                // brightness readout went stale.
                 DimmerOverlay.onStateChanged?.invoke()
             }
         }

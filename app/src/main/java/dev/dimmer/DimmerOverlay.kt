@@ -1,7 +1,7 @@
 package dev.dimmer
 
 import android.accessibilityservice.AccessibilityService
-import android.graphics.Color
+import android.content.Context
 import android.graphics.PixelFormat
 import android.view.View
 import android.view.WindowManager
@@ -13,6 +13,10 @@ import android.view.animation.PathInterpolator
  * TYPE_ACCESSIBILITY_OVERLAY, so it must be created from the
  * AccessibilityService context -- WindowManager rejects that type from anyone
  * else, and TYPE_APPLICATION_OVERLAY would be capped at 0.8 opacity.
+ *
+ * Escape from an unreadable screen is the system accessibility shortcut
+ * (double volume press), configured in Settings > Accessibility > Dimmer.
+ * It disables the service, which fires onUnbind and removes this window.
  */
 object DimmerOverlay {
 
@@ -21,8 +25,8 @@ object DimmerOverlay {
     var scrimAlpha: Float = 0.95f
     var fadeMs: Long = 220L
 
-    /** Fires on show, hide, alpha or colour change -- including from the
-     *  panic button and the QS tile, which act behind the UI's back. */
+    /** Fires on show, hide, alpha or colour change -- including from the QS
+     *  tile, which acts behind the UI's back. */
     var onStateChanged: (() -> Unit)? = null
 
     private val easing = PathInterpolator(0.4f, 0f, 0.2f, 1f)
@@ -33,8 +37,7 @@ object DimmerOverlay {
 
     fun show(svc: AccessibilityService) {
         if (view != null) return
-        // Re-resolve every time, so SYSTEM mode tracks wallpaper changes
-        // without needing to restart anything.
+        // Re-resolve each time so SYSTEM mode tracks wallpaper changes.
         scrimColor = ScrimPalette.resolve(svc, mode)
 
         val wm = svc.getSystemService(WindowManager::class.java)
@@ -45,14 +48,10 @@ object DimmerOverlay {
         wm.addView(v, buildParams())
         view = v
         v.animate().alpha(scrimAlpha).setDuration(fadeMs).setInterpolator(easing).start()
-
-        PanicButton.raise()
-        PanicButton.sync()
         onStateChanged?.invoke()
     }
 
     fun hide(svc: AccessibilityService) {
-        PanicButton.hide()
         val v = view ?: return
         view = null
         val wm = svc.getSystemService(WindowManager::class.java)
@@ -68,12 +67,11 @@ object DimmerOverlay {
             it.animate().cancel()
             it.alpha = scrimAlpha
         }
-        PanicButton.sync()
         onStateChanged?.invoke()
     }
 
-    /** Switch source and apply immediately, even mid-dim. */
-    fun setMode(ctx: android.content.Context, m: ScrimPalette.Mode) {
+    /** Switch colour source and apply immediately, even mid-dim. */
+    fun setMode(ctx: Context, m: ScrimPalette.Mode) {
         mode = m
         scrimColor = ScrimPalette.resolve(ctx, m)
         view?.setBackgroundColor(scrimColor)
