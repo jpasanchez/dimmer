@@ -23,11 +23,15 @@ import kotlin.math.roundToInt
 
 class MainActivity : Activity() {
 
-    // Fine slider covers [FINE_MIN, 1.0] at 1/FINE_STEPS_PER_UNIT resolution.
-    // Everything perceptually interesting lives above 0.95, and the coarse
-    // slider gives that range only 5 of its 100 steps.
-    private val FINE_MIN = 0.95f
-    private val FINE_MAX_PROGRESS = 500          // 0.95 -> 1.00 in 0.0001 steps
+    // Coarse sets a base; fine sweeps ALL the headroom left between that base
+    // and 1.0. At base 0.98 the fine slider covers visible 2.00% -> 0.00%,
+    // which is the whole remaining ghost.
+    //
+    // Both positions are stored rather than derived from alpha. That is what
+    // stops the fine slider from dragging the coarse one to the top: alpha is
+    // the output of the pair, never the source of truth for either.
+    private var baseProgress = 95        // hundredths of alpha
+    private var fineProgress = 0         // percent of the remaining headroom
 
     private lateinit var setupBtn: Button
     private lateinit var toggleBtn: Button
@@ -89,18 +93,19 @@ class MainActivity : Activity() {
             }
         }
 
+        splitFromAlpha(DimmerOverlay.scrimAlpha)
+
         alphaLabel = TextView(this)
         coarseBar = SeekBar(this).apply {
             max = 100
-            setOnSeekBarChangeListener(listener { p -> DimmerOverlay.setAlpha(p / 100f) })
+            progress = baseProgress
+            setOnSeekBarChangeListener(listener { p -> baseProgress = p; applySliders() })
         }
-
         fineLabel = TextView(this).apply { setPadding(0, pad / 2, 0, 0) }
         fineBar = SeekBar(this).apply {
-            max = FINE_MAX_PROGRESS
-            setOnSeekBarChangeListener(listener { p ->
-                DimmerOverlay.setAlpha(FINE_MIN + p / 10000f)
-            })
+            max = 100
+            progress = fineProgress
+            setOnSeekBarChangeListener(listener { p -> fineProgress = p; applySliders() })
         }
 
         readout = TextView(this).apply { setPadding(0, pad, 0, 0) }
@@ -111,6 +116,26 @@ class MainActivity : Activity() {
         ).forEach { root.addView(it, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)) }
 
         setContentView(root)
+    }
+
+    private fun baseAlpha() = baseProgress / 100f
+
+    /** alpha = base + fine% of whatever is left between base and 1.0 */
+    private fun combined(): Float {
+        val b = baseAlpha()
+        return (b + (fineProgress / 100f) * (1f - b)).coerceIn(0f, 1f)
+    }
+
+    private fun applySliders() = DimmerOverlay.setAlpha(combined())
+
+    /** Recover both positions from an alpha set elsewhere (first launch). */
+    private fun splitFromAlpha(a: Float) {
+        baseProgress = (a * 100).toInt().coerceIn(0, 100)
+        val b = baseAlpha()
+        val headroom = 1f - b
+        fineProgress =
+            if (headroom <= 0f) 0
+            else (((a - b) / headroom) * 100).roundToInt().coerceIn(0, 100)
     }
 
     /** Programmatic progress changes must not feed back as user input. */
@@ -144,21 +169,20 @@ class MainActivity : Activity() {
         val a = DimmerOverlay.scrimAlpha
         val visible = (1f - a) * 100f
 
-        // Both sliders track one value. The guard stops a programmatic set
+        // Sliders are the source of truth, so only push if something outside
+        // this screen moved alpha. The guard also stops a programmatic set
         // from cancelling the drag that caused it.
-        val coarseWant = (a * 100).roundToInt().coerceIn(0, 100)
-        if (coarseBar.progress != coarseWant) coarseBar.progress = coarseWant
-
-        val fineWant = ((a - FINE_MIN) * 10000).roundToInt().coerceIn(0, FINE_MAX_PROGRESS)
-        if (fineBar.progress != fineWant) fineBar.progress = fineWant
+        if (coarseBar.progress != baseProgress) coarseBar.progress = baseProgress
+        if (fineBar.progress != fineProgress) fineBar.progress = fineProgress
 
         alphaLabel.text =
-            "Scrim alpha  ${if (a >= FINE_MIN) "%.4f".format(a) else "%.2f".format(a)}" +
-                "     Visible  ${"%.2f".format(visible)}%"
+            "Scrim alpha  ${"%.4f".format(a)}     Visible  ${"%.2f".format(visible)}%"
 
+        val b0 = baseAlpha()
         fineLabel.text =
-            if (a >= FINE_MIN) "Fine  0.9500 - 1.0000"
-            else "Fine  0.9500 - 1.0000   (coarse is below this range)"
+            if (baseProgress >= 100) "Fine  (base at 1.0, no headroom left)"
+            else "Fine  ${fineProgress}%  of the headroom above ${"%.2f".format(b0)}" +
+                "     sweeps visible ${"%.2f".format((1f - b0) * 100)}% to 0.00%"
 
         val b = VisibilityMonitor.brightness(this)
         val v = VisibilityMonitor.visibility(this)
