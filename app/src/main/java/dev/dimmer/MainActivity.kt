@@ -19,14 +19,23 @@ import android.widget.SeekBar
 import android.widget.Spinner
 import android.widget.TextView
 import java.util.function.Consumer
+import kotlin.math.roundToInt
 
 class MainActivity : Activity() {
+
+    // Fine slider covers [FINE_MIN, 1.0] in 0.0001 steps.
+    // Everything perceptually interesting lives above 0.95, and the coarse
+    // slider gives that range only 5 of its 100 steps.
+    private val FINE_MIN = 0.95f
+    private val FINE_MAX_PROGRESS = 500          // 0.95 -> 1.00 in 0.0001 steps
 
     private lateinit var setupBtn: Button
     private lateinit var toggleBtn: Button
     private lateinit var modeSpinner: Spinner
     private lateinit var alphaLabel: TextView
-    private lateinit var alphaBar: SeekBar
+    private lateinit var coarseBar: SeekBar
+    private lateinit var fineLabel: TextView
+    private lateinit var fineBar: SeekBar
     private lateinit var readout: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -81,25 +90,38 @@ class MainActivity : Activity() {
         }
 
         alphaLabel = TextView(this)
-        alphaBar = SeekBar(this).apply {
+        coarseBar = SeekBar(this).apply {
             max = 100
-            progress = (DimmerOverlay.scrimAlpha * 100).toInt()
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(sb: SeekBar, p: Int, fromUser: Boolean) {
-                    if (fromUser) DimmerOverlay.setAlpha(p / 100f)
-                }
-                override fun onStartTrackingTouch(sb: SeekBar) {}
-                override fun onStopTrackingTouch(sb: SeekBar) {}
+            setOnSeekBarChangeListener(listener { p -> DimmerOverlay.setAlpha(p / 100f) })
+        }
+
+        fineLabel = TextView(this).apply { setPadding(0, pad / 2, 0, 0) }
+        fineBar = SeekBar(this).apply {
+            max = FINE_MAX_PROGRESS
+            setOnSeekBarChangeListener(listener { p ->
+                DimmerOverlay.setAlpha(FINE_MIN + p / 10000f)
             })
         }
 
         readout = TextView(this).apply { setPadding(0, pad, 0, 0) }
 
-        listOf(setupBtn, toggleBtn, addTile, modeSpinner, alphaLabel, alphaBar, readout)
-            .forEach { root.addView(it, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)) }
+        listOf(
+            setupBtn, toggleBtn, addTile, modeSpinner,
+            alphaLabel, coarseBar, fineLabel, fineBar, readout
+        ).forEach { root.addView(it, LinearLayout.LayoutParams(MATCH_PARENT, WRAP_CONTENT)) }
 
         setContentView(root)
     }
+
+    /** Programmatic progress changes must not feed back as user input. */
+    private fun listener(onUser: (Int) -> Unit) =
+        object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(sb: SeekBar, p: Int, fromUser: Boolean) {
+                if (fromUser) onUser(p)
+            }
+            override fun onStartTrackingTouch(sb: SeekBar) {}
+            override fun onStopTrackingTouch(sb: SeekBar) {}
+        }
 
     override fun onResume() {
         super.onResume()
@@ -119,10 +141,24 @@ class MainActivity : Activity() {
         toggleBtn.text = if (DimmerOverlay.isShowing) "Turn dimmer OFF" else "Turn dimmer ON"
         toggleBtn.isEnabled = on
 
-        val want = (DimmerOverlay.scrimAlpha * 100).toInt()
-        if (alphaBar.progress != want) alphaBar.progress = want
+        val a = DimmerOverlay.scrimAlpha
+        val visible = (1f - a) * 100f
 
-        alphaLabel.text = "Scrim alpha  ${"%.2f".format(DimmerOverlay.scrimAlpha)}"
+        // Both sliders track one value. The guard stops a programmatic set
+        // from cancelling the drag that caused it.
+        val coarseWant = (a * 100).roundToInt().coerceIn(0, 100)
+        if (coarseBar.progress != coarseWant) coarseBar.progress = coarseWant
+
+        val fineWant = ((a - FINE_MIN) * 10000).roundToInt().coerceIn(0, FINE_MAX_PROGRESS)
+        if (fineBar.progress != fineWant) fineBar.progress = fineWant
+
+        alphaLabel.text =
+            "Scrim alpha  ${if (a >= FINE_MIN) "%.4f".format(a) else "%.2f".format(a)}" +
+                "     Visible  ${"%.2f".format(visible)}%"
+
+        fineLabel.text =
+            if (a >= FINE_MIN) "Fine  0.9500 - 1.0000"
+            else "Fine  0.9500 - 1.0000   (coarse is below this range)"
 
         val b = VisibilityMonitor.brightness(this)
         val v = VisibilityMonitor.visibility(this)
@@ -155,6 +191,7 @@ class MainActivity : Activity() {
             append("\n\nUsing ${"%.0f".format(b * 100)}%")
             append("   Est. visibility ${"%.1f".format(v * 100)}%")
             if (v <= VisibilityMonitor.floor) append("   <- panic shows")
+            append("\n\nNative shade measures ~2.0% visible.")
         }
     }
 }
